@@ -85,10 +85,21 @@ module Server = functor(T: TRANSPORT) -> struct
 				lwt request = match_lwt (PS.recv channel) with
 					| Ok x -> return x
 					| Exception e -> raise_lwt e in
-				let events = take_watch_events () in
-				let reply = Call.reply store c request in
 				Lwt_mutex.with_lock m
 					(fun () ->
+						(* A side-effect of processing a Watch request is that other parallel
+						   modifications of the tree will start to queue watch events on this
+						   'new' path. We need to prevent the background watch flusher thread
+						   flushing these before the Watch reply packet is sent. Note we still
+						   want to interleave RPCs with sending watch events here to avoid a
+						   large pending queue of requests building up. *)
+
+						(* These cannot include any new watch events *)
+						let events = take_watch_events () in
+
+						let reply = Call.reply store c request in
+						(* New watch events can be generated but not flushed because we hold m *)
+
 						lwt () = flush_watch_events events in	
 						PS.send channel reply
 					)
