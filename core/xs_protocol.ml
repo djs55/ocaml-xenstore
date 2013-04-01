@@ -139,6 +139,9 @@ type t = {
   data: Buffer.t;
 }
 
+let to_debug_string pkt =
+  Printf.sprintf "ty=%s tid=%ld rid=%ld data(%d)=%s" (Op.to_string pkt.ty) pkt.tid pkt.rid pkt.len (Buffer.contents pkt.data)
+
 cstruct header {
   uint32_t ty;
   uint32_t rid;

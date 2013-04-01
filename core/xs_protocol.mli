@@ -105,6 +105,7 @@ module PacketStream : functor(IO: IO) -> sig
 end
 
 val to_string : t -> string
+val to_debug_string : t -> string
 val get_tid : t -> int32
 val get_ty : t -> Op.t
 val get_data : t -> string

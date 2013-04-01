@@ -66,6 +66,7 @@ module Server = functor(T: TRANSPORT) -> struct
 		let flush_watch_events q =
 			Lwt_list.iter_s
 				(fun (path, token) ->
+					debug "%s flush path=%s token=%s" (Xs_protocol.string_of_address address) path token;
 					PS.send channel (Xs_protocol.(Response.(print (Watchevent(path, token)) 0l 0l)))
 				) q in
 		let (background_watch_event_flusher: unit Lwt.t) =
@@ -75,7 +76,11 @@ module Server = functor(T: TRANSPORT) -> struct
 						lwt () = while_lwt Queue.length c.Connection.watch_events = 0 do
 							Lwt_condition.wait ~mutex:m c.Connection.cvar
 						done in
-						flush_watch_events (take_watch_events ())
+						let events = take_watch_events () in
+						debug "%s start background watch flush" (Xs_protocol.string_of_address address);
+						lwt () = flush_watch_events events in
+						debug "%s stop background watch flush" (Xs_protocol.string_of_address address);
+						return ()
 					)
 			done in
 
@@ -85,6 +90,7 @@ module Server = functor(T: TRANSPORT) -> struct
 				lwt request = match_lwt (PS.recv channel) with
 					| Ok x -> return x
 					| Exception e -> raise_lwt e in
+				debug "%s received %s" (Xs_protocol.string_of_address address) (Xs_protocol.to_debug_string request);
 				Lwt_mutex.with_lock m
 					(fun () ->
 						(* A side-effect of processing a Watch request is that other parallel
@@ -99,9 +105,12 @@ module Server = functor(T: TRANSPORT) -> struct
 
 						let reply = Call.reply store c request in
 						(* New watch events can be generated but not flushed because we hold m *)
+						debug "%s reply generated" (Xs_protocol.string_of_address address);
 
 						lwt () = flush_watch_events events in	
-						PS.send channel reply
+						lwt () = PS.send channel reply in
+						debug "%s sent %s" (Xs_protocol.string_of_address address) (Xs_protocol.to_debug_string reply);
+						return ()
 					)
 			done in
 			T.destroy t
