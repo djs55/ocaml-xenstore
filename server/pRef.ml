@@ -62,13 +62,15 @@ module Make(V: S.SEXPABLE) = struct
     let tr = Transaction.make Transaction.none db in
     let path = Protocol.Path.of_string_list t.name in
     let perms = Perms.of_domain 0 in
-    let v =
-      if Transaction.exists tr perms path
-      then try V.t_of_sexp (Sexp.of_string (Transaction.read tr perms path)) with _ -> t.default
-      else t.default in
-    Transaction.write tr None 0 (Perms.of_domain 0) path (Sexp.to_string (V.sexp_of_t v));
-    Database.persist (Transaction.get_side_effects tr) >>= fun () ->
-    return v
+    match (if Transaction.exists tr perms path then begin
+             try Some (V.t_of_sexp (Sexp.of_string (Transaction.read tr perms path))) with _ -> None
+           end else None) with
+    | None ->
+      Transaction.write tr None 0 (Perms.of_domain 0) path (Sexp.to_string (V.sexp_of_t t.default));
+      Database.persist (Transaction.get_side_effects tr) >>= fun () ->
+      return t.default
+    | Some v ->
+      return v
 
   let create name default =
     let t = { name; default } in
