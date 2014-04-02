@@ -26,27 +26,38 @@ module Make(K: S.STRINGABLE)(T: S.SEXPABLE) = struct
     name: string list;
   }
 
-  let recreate t =
+  let exists t =
     Database.store >>= fun db ->
     let tr = Transaction.make Transaction.none db in
     let path = Protocol.Path.of_string_list t.name in
-    if not(Transaction.exists tr (Perms.of_domain 0) path) then Transaction.mkdir tr None 0 (Perms.of_domain 0) path;
-    Database.persist (Transaction.get_side_effects tr)
+    return (Transaction.exists tr (Perms.of_domain 0) path)
+
+  let recreate t =
+    exists t >>= function
+    | true -> return ()
+    | false ->
+      Database.store >>= fun db ->
+      let tr = Transaction.make Transaction.none db in
+      let path = Protocol.Path.of_string_list t.name in
+      if not(Transaction.exists tr (Perms.of_domain 0) path) then Transaction.mkdir tr None 0 (Perms.of_domain 0) path;
+      Database.persist (Transaction.get_side_effects tr)
 
   let create name =
     let t = { name } in
-    recreate t >>= fun () ->
     return t
 
   let name t = t.name
 
   let cardinal t =
-    recreate t >>= fun () ->
-    Database.store >>= fun db ->
-    let tr = Transaction.make Transaction.none db in
-    let path = Protocol.Path.of_string_list t.name in
-    let ls = Transaction.ls tr (Perms.of_domain 0) path in
-    return (List.length ls)
+    exists t >>= function
+    | false -> return 0
+    | true ->
+      recreate t >>= fun () ->
+      Database.store >>= fun db ->
+      let tr = Transaction.make Transaction.none db in
+      let path = Protocol.Path.of_string_list t.name in
+      let ls = Transaction.ls tr (Perms.of_domain 0) path in
+      return (List.length ls)
 
   let add key item t =
     Database.store >>= fun db ->
@@ -56,11 +67,12 @@ module Make(K: S.STRINGABLE)(T: S.SEXPABLE) = struct
     Database.persist (Transaction.get_side_effects tr)
 
   let remove key t =
-    recreate t >>= fun () ->
     Database.store >>= fun db ->
     let tr = Transaction.make Transaction.none db in
     let key = K.to_string key in
-    Transaction.rm tr (Perms.of_domain 0) (Protocol.Path.of_string_list (t.name @ [ key ]));
+    let path = Protocol.Path.of_string_list (t.name @ [ key ]) in
+    if Transaction.exists tr (Perms.of_domain 0) path
+    then Transaction.rm tr (Perms.of_domain 0) path;
     Database.persist (Transaction.get_side_effects tr)
 
   let mem key t =
@@ -82,21 +94,23 @@ module Make(K: S.STRINGABLE)(T: S.SEXPABLE) = struct
     Database.store >>= fun db ->
     let tr = Transaction.make Transaction.none db in
     let path = Protocol.Path.of_string_list t.name in
-    if Transaction.exists tr (Perms.of_domain 0) path then Transaction.rm tr (Perms.of_domain 0) path;
-    Transaction.mkdir tr None 0 (Perms.of_domain 0) path;
+    if try Transaction.ls tr (Perms.of_domain 0) path <> [] with _ -> false then Transaction.rm tr (Perms.of_domain 0) path;
     Database.persist (Transaction.get_side_effects tr) >>= fun () ->
     return ()
 
   let fold f initial t =
-    recreate t >>= fun () ->
-    Database.store >>= fun db ->
-    let tr = Transaction.make Transaction.none db in
-    let path = Protocol.Path.of_string_list t.name in
-    let ls = Transaction.ls tr (Perms.of_domain 0) path in
-    return (List.fold_left (fun acc k ->
-      let v = Transaction.read tr (Perms.of_domain 0) (Protocol.Path.of_string_list (t.name @ [k])) in
-      f acc (K.of_string k) (T.t_of_sexp (Sexp.of_string v))
-    ) initial ls)
+    exists t >>= function
+    | false -> return initial
+    | true ->
+      recreate t >>= fun () ->
+      Database.store >>= fun db ->
+      let tr = Transaction.make Transaction.none db in
+      let path = Protocol.Path.of_string_list t.name in
+      let ls = Transaction.ls tr (Perms.of_domain 0) path in
+      return (List.fold_left (fun acc k ->
+        let v = Transaction.read tr (Perms.of_domain 0) (Protocol.Path.of_string_list (t.name @ [k])) in
+        f acc (K.of_string k) (T.t_of_sexp (Sexp.of_string v))
+      ) initial ls)
 
   let max_binding t =
     fold (fun best k v -> match best with
