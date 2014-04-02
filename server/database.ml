@@ -39,7 +39,7 @@ let initialise = function
   Lwt.wakeup store_wakener s;
   return ()
 | S.Git filename ->
-  let module DB = (val IrminGit.local ~bare:false filename) in
+  let module DB = (val IrminGit.local ~bare:true filename) in
   DB.create () >>= fun db ->
 
   let dir_suffix = ".dir" in
