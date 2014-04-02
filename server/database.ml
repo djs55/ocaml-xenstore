@@ -62,12 +62,12 @@ let initialise = function
   (* These must all be idempotent *)
   let p = function
     | Store.Write(path, contents) ->
-      Printf.fprintf stderr "+ %s\n%!" (Protocol.Path.to_string path);
+      Printf.fprintf stderr "xenstore-write %s %s\n%!" (Protocol.Path.to_string path) (Sexp.to_string (Node.sexp_of_contents contents));
       (try_lwt
         DB.update db (value_of_filename path) (Sexp.to_string (Node.sexp_of_contents contents))
       with e -> (Printf.fprintf stderr "ERR %s\n%!" (Printexc.to_string e)); return ())
     | Store.Rm path ->
-      Printf.fprintf stderr "- %s\n%!" (Protocol.Path.to_string path);
+      Printf.fprintf stderr "xenstore-rm %s\n%!" (Protocol.Path.to_string path);
       (try_lwt
         DB.remove db (dir_of_filename path) >>= fun () ->
         DB.remove db (value_of_filename path)
