@@ -1,5 +1,5 @@
 # OASIS_START
-# DO NOT EDIT (digest: 19a216ff2577d03ebda943c8375bd6d0)
+# DO NOT EDIT (digest: db0fd39da9f2d070fdd1d20ecb6a137c)
 # Ignore VCS directories, you can use the same kind of rule outside
 # OASIS_START/STOP if you want to exclude directories that contains
 # useless stuff for the build process
@@ -99,6 +99,17 @@
 <server_test/server_test.{native,byte}>: use_xenstore
 <server_test/server_test.{native,byte}>: use_xenstored
 <server_test/server_test.{native,byte}>: custom
+# Executable persistence_test
+<server_test/persistence_test.{native,byte}>: pkg_cstruct
+<server_test/persistence_test.{native,byte}>: pkg_cstruct.syntax
+<server_test/persistence_test.{native,byte}>: pkg_irminsule.backend.git
+<server_test/persistence_test.{native,byte}>: pkg_lwt
+<server_test/persistence_test.{native,byte}>: pkg_oUnit
+<server_test/persistence_test.{native,byte}>: pkg_sexplib
+<server_test/persistence_test.{native,byte}>: pkg_uri
+<server_test/persistence_test.{native,byte}>: use_xenstore
+<server_test/persistence_test.{native,byte}>: use_xenstored
+<server_test/persistence_test.{native,byte}>: custom
 # Executable server_binary_test
 <server_test/binary.{native,byte}>: pkg_cstruct
 <server_test/binary.{native,byte}>: pkg_cstruct.syntax
@@ -254,6 +265,7 @@ true: annot
 <client/*.ml>: pkg_lwt.syntax
 <server/*.ml>: pkg_lwt.syntax
 <server_test/binary.ml>: pkg_lwt.syntax
+<server_test/persistence_test.ml>: pkg_sexplib.syntax
 <userspace/*.ml>: pkg_lwt.syntax
 <core/client.ml>: pkg_lwt.syntax
 <core/protocol.ml>: pkg_sexplib.syntax

@@ -34,6 +34,7 @@ test:
 	_build/core_test/core_test.native
 	_build/server_test/server_test.native
 	_build/server_test/binary.native
+	_build/server_test/persistence_test.native
 
 
 reinstall: setup.bin

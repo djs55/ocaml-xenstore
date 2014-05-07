@@ -64,6 +64,15 @@ Executable server_test
   Install:            false
   BuildDepends:       lwt, xenstore, xenstored, oUnit
 
+Executable persistence_test
+  CompiledObject:     best
+  Path:               server_test
+  MainIs:             persistence_test.ml
+  Build$:             flag(tests)
+  Custom:             true
+  Install:            false
+  BuildDepends:       lwt, xenstore, xenstored, oUnit
+
 Executable server_binary_test
   CompiledObject:     best
   Path:               server_test
@@ -81,6 +90,11 @@ Test core_test
 Test server_test
   Run$:               flag(tests)
   Command:            $server_test
+  WorkingDirectory:   server_test
+
+Test persistence_test
+  Run$:               flag(tests)
+  Command:            $persistence_test
   WorkingDirectory:   server_test
 
 Executable oxenstored
