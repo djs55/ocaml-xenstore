@@ -39,6 +39,34 @@ let set_simple_t () =
   assert_equal ~printer:string_of_int 0 n;
   return ()
 
+(* Binary Writer *)
+
+(* writer which consumes 1 byte at a time *)
+
+(* writer which consumes 1 MiB at a time *)
+
+(* flush with nothing outstanding *)
+let binwriter_flush_none_t () =
+  let ok = ref true in
+  let module W = struct
+    type t = unit
+    let next _ =
+      ok := false;
+      return (0L, Cstruct.create 0)
+    let ack _ ofs =
+      if ofs <> 0L then ok := false;
+      return ()
+  end in
+  let module M = PBinWriter.Make(W) in
+  M.create [ "foo" ] () >>= fun t ->
+  M.flush t >>= fun () ->
+  assert_equal ~printer:string_of_bool true !ok;
+  return ()
+
+(* add one request and flush *)
+
+(* add two requests and flush *)
+
 let _ =
   let verbose = ref false in
   Arg.parse [
@@ -49,5 +77,6 @@ let _ =
   let suite = "persistence" >:::
     [
       "set_simple" >:: (fun () -> Lwt_main.run (set_simple_t ()));
+      "binwriter_flush_none" >:: (fun () -> Lwt_main.run (binwriter_flush_none_t ()));
 	] in
   run_test_tt ~verbose:!verbose suite

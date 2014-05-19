@@ -95,12 +95,8 @@ module Make = functor(T: S.TRANSPORT) -> struct
                       let hdr = { Header.tid = 0l; rid = 0l; ty = Protocol.Response.get_ty response; len = len - Protocol.Header.sizeof} in
                       ignore (Protocol.Header.marshal hdr reply_buf);
                       PWriter.write writer reply_buf' write_ofs >>= fun write_ofs ->
-                      PWriter.sync writer >>= function
-                      | None ->
-                        error "PWriter.sync failed: closing channel";
-                        fail End_of_file
-                      | Some write_ofs ->
-                        return write_ofs
+                      PWriter.flush writer >>= fun () ->
+                      return write_ofs
                     ) in
 
                 let read =

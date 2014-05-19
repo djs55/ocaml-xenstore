@@ -30,9 +30,8 @@ module type S = sig
       into the output stream. For simplicity we assume the chunks
       are all non-overlapping. *)
 
-  val sync: t -> int64 option Lwt.t
-  (** [sync t]: ensures that as much queued data as possible is
-      written. *)
+  val flush: t -> unit Lwt.t
+  (** [flush t]: ensures that all queued data is written. *)
 end
 (** A persistent dynamically-sized writable stream of data *)
 
@@ -82,25 +81,31 @@ module Make(C: S.SHARED_MEMORY_CHANNEL) = (struct
     M.add ofs (Cstruct.to_string buf) t.root >>= fun () ->
     return Int64.(add ofs (of_int (Cstruct.len buf)))
 
-  let sync t =
+  let flush t =
     C.next t.c >>= fun (offset, buffer) ->
-    M.fold (fun acc k v -> (k, v) :: acc) [] t.root >>= fun all ->
-    List.iter (blit_fragment (offset, buffer)) all;
-    (* acknowledge the data we successfully wrote *)
-    ( match List.sort (fun (a, _) (b, _) -> compare b a) all with
-      | [] -> return None
-      | (ofs, string) :: _ ->
-        let max_data_avail = Int64.(add ofs (of_int (String.length string))) in
-        let written_relative_to_buffer = min (Int64.of_int (Cstruct.len buffer)) (Int64.sub max_data_avail offset) in
-        let written_offset = Int64.add offset written_relative_to_buffer in
-        C.ack t.c written_offset >>= fun () ->
-        return (Some written_offset) ) >>= fun written_offset ->
-    (* clear uneeded data *)
-    Lwt_list.iter_s
-      (fun (ofs, buf) ->
-        if Int64.(add ofs (of_int (String.length buf))) <= Int64.(add offset (of_int (Cstruct.len buffer)))
-        then M.remove ofs t.root
-        else return ()
-      ) all >>= fun () ->
-    return written_offset
+    let rec loop () =
+      M.fold (fun acc k v -> (k, v) :: acc) [] t.root >>= function
+      | [] -> return ()
+      | all ->
+        List.iter (blit_fragment (offset, buffer)) all;
+        (* acknowledge the data we successfully wrote *)
+        ( match List.sort (fun (a, _) (b, _) -> compare b a) all with
+          | [] -> return None
+          | (ofs, string) :: _ ->
+            let max_data_avail = Int64.(add ofs (of_int (String.length string))) in
+(*
+        let max_buff_avail = Int64.(add offset (of_int (Cstruct.len buffer))) in
+*)
+            let written_relative_to_buffer = min (Int64.of_int (Cstruct.len buffer)) (Int64.sub max_data_avail offset) in
+            let written_offset = Int64.add offset written_relative_to_buffer in
+            C.ack t.c written_offset >>= fun () ->
+            return (Some written_offset) ) >>= fun written_offset ->
+        (* clear uneeded data *)
+        Lwt_list.iter_s
+          (fun (ofs, buf) ->
+            if Int64.(add ofs (of_int (String.length buf))) <= Int64.(add offset (of_int (Cstruct.len buffer)))
+            then M.remove ofs t.root
+            else return ()
+          ) all in
+    loop ()
 end: S with type s = C.t)

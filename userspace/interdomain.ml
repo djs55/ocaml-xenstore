@@ -31,7 +31,6 @@ type channel = {
   page: Io_page.t;
   ring: Cstruct.t;
   port: int;
-  c: unit Lwt_condition.t;
   mutable shutdown: bool;
 }
 
@@ -101,7 +100,7 @@ let virq_thread () =
           debug "closing connection to domid: %d" domid;
           let t = Hashtbl.find domains domid in
           t.shutdown <- true;
-          Lwt_condition.broadcast t.c ()
+          Unix_activations.wake (Eventchn.of_int t.port)
         ) to_close;
         (* XXX
       if release_domain
@@ -109,15 +108,6 @@ let virq_thread () =
       *)
     lwt after = Unix_activations.after virq_port from in
     loop after in
-  loop Unix_activations.program_start
-
-let service_domain d =
-  let rec loop from =
-    Lwt_condition.broadcast d.c ();
-    lwt after = Unix_activations.after (Eventchn.of_int d.port) from in
-    if d.shutdown
-    then return ()
-    else loop after in
   loop Unix_activations.program_start
 
 let create_dom0 () =
@@ -140,10 +130,8 @@ let create_dom0 () =
       page = page;
       ring = Cstruct.of_bigarray page;
       port = port;
-      c = Lwt_condition.create ();
       shutdown = false;
     } in
-    let (_: unit Lwt.t) = service_domain d in
     Hashtbl.add domains 0 d;
     Hashtbl.add by_port port d;
     return (Some d)
@@ -161,10 +149,8 @@ let create_domU address =
       page = page;
       ring = Cstruct.of_bigarray page;
       port = port;
-      c = Lwt_condition.create ();
       shutdown = false;
     } in
-    let (_: unit Lwt.t) = service_domain d in
     Hashtbl.add domains address.domid d;
     Hashtbl.add by_port port d;
     return (Some d)
@@ -175,23 +161,29 @@ let create () =
 module Reader = struct
   type t = channel
 
-  let rec next t =
-    let seq, available = Xenstore_ring.Ring.Back.read_prepare t.ring in
-    let available_bytes = Cstruct.len available in
-    if available_bytes = 0 then begin
-      Lwt_condition.wait t.c >>= fun () ->
-      next t
-    end else return (Int64.of_int32 seq, available) 
+  let next t =
+    let rec loop from =
+      let seq, available = Xenstore_ring.Ring.Back.read_prepare t.ring in
+      let available_bytes = Cstruct.len available in
+      (* wait until something interesting happens *)
+      if not t.shutdown && available_bytes = 0 then begin
+error "ZZZ Reader.next seq = %ld blocking on port %d" seq t.port;
+        Unix_activations.after (Eventchn.of_int t.port) from >>= fun from ->
+error "ZZZ Reader.next woken";
+        loop from
+      end else return (Int64.of_int32 seq, available) in
+    loop Unix_activations.program_start
 
   let ack t seq =
     Xenstore_ring.Ring.Back.read_commit t.ring (Int64.to_int32 seq);
+error "ZZZ Reader.ack seq = %Ld notifying port %d" seq t.port;
     Eventchn.(notify (init ()) (of_int t.port));
     return ()
 end
 
 
 let read t buf =
-  let rec loop buf =
+  let rec loop buf from =
     if Cstruct.len buf = 0
     then return ()
     else if t.shutdown
@@ -200,35 +192,43 @@ let read t buf =
       let seq, available = Xenstore_ring.Ring.Back.read_prepare t.ring in
       let available_bytes = Cstruct.len available in
       if available_bytes = 0 then begin
-        Lwt_condition.wait t.c >>= fun () ->
-        loop buf
+error "ZZZ read seq = %ld blocking on port %d" seq t.port;
+        Unix_activations.after (Eventchn.of_int t.port) from >>= fun from ->
+error "ZZZ read woken";
+        loop buf from
       end else begin
         let consumable = min (Cstruct.len buf) available_bytes in
         Cstruct.blit available 0 buf 0 consumable;
         Xenstore_ring.Ring.Back.read_commit t.ring Int32.(add seq (of_int consumable));
         Eventchn.(notify (init ()) (of_int t.port));
-        loop (Cstruct.shift buf consumable)
+        loop (Cstruct.shift buf consumable) from
       end in
-  loop buf
+  loop buf Unix_activations.program_start
 
 module Writer = struct
   type t = channel
-  let rec next t =
-    let seq, available = Xenstore_ring.Ring.Back.write_prepare t.ring in
-    let available_bytes = Cstruct.len available in
-    if available_bytes = 0 then begin
-      Lwt_condition.wait t.c >>= fun () ->
-      next t
-    end else return (Int64.of_int32 seq, available)
+  let next t =
+    let rec loop from =
+      let seq, available = Xenstore_ring.Ring.Back.write_prepare t.ring in
+      let available_bytes = Cstruct.len available in
+      (* wait until something interesting happens *)
+      if not t.shutdown && available_bytes = 0 then begin
+error "ZZZ Writer.next seq = %ld blocking on port %d" seq t.port;
+        Unix_activations.after (Eventchn.of_int t.port) from >>= fun from ->
+error "ZZZ Writer.next woken";
+        loop from
+      end else return (Int64.of_int32 seq, available) in
+    loop Unix_activations.program_start
 
   let ack t seq =
     Xenstore_ring.Ring.Back.write_commit t.ring (Int64.to_int32 seq);
+error "ZZZ Writer ack seq = %Ld signalling port %d" seq t.port;
     Eventchn.(notify (init ()) (of_int t.port));
     return ()
 end
 
 let write t buf =
-  let rec loop buf =
+  let rec loop buf from =
     if Cstruct.len buf = 0
     then return ()
     else if t.shutdown
@@ -237,16 +237,16 @@ let write t buf =
       let seq, available = Xenstore_ring.Ring.Back.write_prepare t.ring in
       let available_bytes = Cstruct.len available in
       if available_bytes = 0 then begin
-        Lwt_condition.wait t.c >>= fun () ->
-        loop buf
+        Unix_activations.after (Eventchn.of_int t.port) from >>= fun from ->
+        loop buf from
       end else begin
         let consumable = min (Cstruct.len buf) available_bytes in
         Cstruct.blit buf 0 available 0 consumable;
         Xenstore_ring.Ring.Back.write_commit t.ring Int32.(add seq (of_int consumable));
         Eventchn.(notify (init ()) (of_int t.port));
-        loop (Cstruct.shift buf consumable)
+        loop (Cstruct.shift buf consumable) from
       end in
-  loop buf
+  loop buf Unix_activations.program_start
 
 let destroy t =
   let eventchn = Eventchn.init () in
@@ -291,18 +291,16 @@ module Introspect = struct
       | [ "local-port" ] -> Some (string_of_int t.port)
       | [ "remote-port" ] -> Some (string_of_int t.address.remote_port)
       | [ "shutdown" ] -> Some (string_of_bool t.shutdown)
-      | [ "wakeup" ]
       | [ "request" ]
       | [ "response" ] -> Some ""
       | [ x ] when List.mem_assoc x pairs -> Some (List.assoc x pairs)
       | _ -> None
 
   let write t path v = match path with
-    | [ "wakeup" ] -> Lwt_condition.broadcast t.c (); true
     | _ -> false
 
   let ls t = function
-    | [] -> [ "mfn"; "local-port"; "remote-port"; "shutdown"; "wakeup"; "request"; "response" ]
+    | [] -> [ "mfn"; "local-port"; "remote-port"; "shutdown"; "request"; "response" ]
     | [ "request" ]
     | [ "response" ] -> [ "cons"; "prod"; "data" ]
     | _ -> []
