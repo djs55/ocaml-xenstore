@@ -26,25 +26,43 @@ end)(struct type t = int with sexp end)
 
 let prefix = [ "tool"; "xenstored"; "quota" ]
 
-(* Global default quotas: *)
-let maxent         = PRef.Int.create (prefix @ [ "default"; "number-of-entries" ]) 10000
-let maxsize        = PRef.Int.create (prefix @ [ "default"; "entry-length" ]) 4096
-let maxwatch       = PRef.Int.create (prefix @ [ "default"; "number-of-registered-watches" ]) 50
-let maxtransaction = PRef.Int.create (prefix @ [ "default"; "number-of-active-transactions" ]) 20
-let maxwatchevent  = PRef.Int.create (prefix @ [ "default"; "number-of-queued-watch-events" ]) 256
+let maxent, maxent_wakener = Lwt.task ()
+let maxsize, maxsize_wakener = Lwt.task ()
+let maxwatch, maxwatch_wakener = Lwt.task ()
+let maxtransaction, maxtransaction_wakener = Lwt.task ()
+let maxwatchevent, maxwatchevent_wakener = Lwt.task ()
+let maxent_overrides, maxent_overrides_wakener = Lwt.task ()
+let maxwatch_overrides, maxwatch_overrides_wakener = Lwt.task ()
+let maxtransaction_overrides, maxtransaction_overrides_wakener = Lwt.task ()
 
-(* Per-domain quota overrides: *)
-let maxent_overrides         = PerDomain.create (prefix @ [ "number-of-entries" ])
-let maxwatch_overrides       = PerDomain.create (prefix @ [ "number-of-registered-watches" ])
-let maxtransaction_overrides = PerDomain.create (prefix @ [ "number-of-active-transactions" ])
+let _ =
+  PRef.Int.create (prefix @ [ "default"; "number-of-entries" ]) 10000 >>= fun (maxent, e1) ->
+  PRef.Int.create (prefix @ [ "default"; "entry-length" ]) 4096 >>= fun (maxsize, e2) ->
+  PRef.Int.create (prefix @ [ "default"; "number-of-registered-watches" ]) 50 >>= fun (maxwatch, e3) ->
+  PRef.Int.create (prefix @ [ "default"; "number-of-active-transactions" ]) 20 >>= fun (maxtransaction, e4) ->
+  PRef.Int.create (prefix @ [ "default"; "number-of-queued-watch-events" ]) 256 >>= fun (maxwatchevent, e5) ->
+  PerDomain.create (prefix @ [ "number-of-entries" ]) >>= fun (maxent_overrides, e6) ->
+  PerDomain.create (prefix @ [ "number-of-registered-watches" ]) >>= fun (maxwatch_overrides, e7) ->
+  PerDomain.create (prefix @ [ "number-of-active-transactions" ]) >>= fun (maxtransaction_overrides, e8) ->
+  Database.persist ~origin:"Initialise the global quota settings." Transaction.(e1 ++ e2 ++ e3 ++ e4 ++ e5 ++ e6 ++ e7 ++ e8) >>= fun () ->
+  Lwt.wakeup maxent_wakener maxent;
+  Lwt.wakeup maxsize_wakener maxsize;
+  Lwt.wakeup maxwatch_wakener maxwatch;
+  Lwt.wakeup maxtransaction_wakener maxtransaction;
+  Lwt.wakeup maxwatchevent_wakener maxwatchevent;
+  Lwt.wakeup maxent_overrides_wakener maxent_overrides;
+  Lwt.wakeup maxwatch_overrides_wakener maxwatch_overrides;
+  Lwt.wakeup maxtransaction_overrides_wakener maxtransaction_overrides;
+  return ()
 
 let remove domid =
   maxent_overrides >>= fun maxent_overrides ->
   maxwatch_overrides >>= fun maxwatch_overrides ->
   maxtransaction_overrides >>= fun maxtransaction_overrides ->
-  PerDomain.remove domid maxent_overrides >>= fun () ->
-  PerDomain.remove domid maxwatch_overrides >>= fun () ->
-  PerDomain.remove domid maxtransaction_overrides
+  PerDomain.remove domid maxent_overrides >>= fun effects1 ->
+  PerDomain.remove domid maxwatch_overrides >>= fun effects2 ->
+  PerDomain.remove domid maxtransaction_overrides >>= fun effects3 ->
+  return Transaction.(effects1 ++ effects2 ++ effects3)
 
 (* A snapshot of the current state for a given domid, needed to check
    for quota violations during a transaction. *)
@@ -58,13 +76,22 @@ let limits_of_domain domid =
   maxwatch_overrides >>= fun maxwatch_overrides ->
   maxtransaction_overrides >>= fun maxtransaction_overrides ->
   PerDomain.mem domid maxent_overrides >>= fun b ->
-  (if b then
-          PerDomain.find domid maxent_overrides 
-  else PRef.Int.get maxent) >>= fun number_of_entries ->
-  PRef.Int.get maxsize >>= fun entry_length ->
+  Transaction.no_side_effects () >>= fun no_side_effects ->
+  (if b then begin
+    PerDomain.find domid maxent_overrides >>= fun x ->
+    return (x, no_side_effects)
+   end else PRef.Int.get maxent) >>= fun (number_of_entries, e1) ->
+  PRef.Int.get maxsize >>= fun (entry_length, e2) ->
   PerDomain.mem domid maxwatch_overrides >>= fun b ->
-  (if b then PerDomain.find domid maxwatch_overrides else PRef.Int.get maxwatch) >>= fun number_of_registered_watches ->
+  (if b then begin
+    PerDomain.find domid maxwatch_overrides >>= fun x ->
+    return (x, no_side_effects)
+   end else PRef.Int.get maxwatch) >>= fun (number_of_registered_watches, e3) ->
   PerDomain.mem domid maxtransaction_overrides >>= fun b ->
-  (if b then PerDomain.find domid maxtransaction_overrides else PRef.Int.get maxtransaction) >>= fun number_of_active_transactions ->
-  PRef.Int.get maxwatchevent >>= fun number_of_queued_watch_events ->
-  return { Limits.number_of_entries; entry_length; number_of_registered_watches; number_of_active_transactions; number_of_queued_watch_events }
+  (if b then begin
+    PerDomain.find domid maxtransaction_overrides >>= fun x ->
+    return (x, no_side_effects)
+   end else PRef.Int.get maxtransaction) >>= fun (number_of_active_transactions, e4) ->
+  PRef.Int.get maxwatchevent >>= fun (number_of_queued_watch_events, e5) ->
+  let t = { Limits.number_of_entries; entry_length; number_of_registered_watches; number_of_active_transactions; number_of_queued_watch_events } in
+  return (t, Transaction.(e1 ++ e2 ++ e3 ++ e4 ++ e5))

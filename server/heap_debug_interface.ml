@@ -26,5 +26,8 @@ module Introspect = struct
     | _ -> []
 end
 
-let _ = Mount.mount (Protocol.Path.of_string "/tool/xenstored/memory") (module Introspect: Tree.S)
-
+let _ =
+  let open Lwt in
+  let origin = "Initialise the OCaml heap monitoring interface." in
+  Mount.mount (Protocol.Path.of_string "/tool/xenstored/memory") (module Introspect: Tree.S) >>= fun e ->
+  Database.persist ~origin e

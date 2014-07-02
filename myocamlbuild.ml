@@ -1,5 +1,5 @@
 (* OASIS_START *)
-(* DO NOT EDIT (digest: 5b6c5ee6c8955871ee2ad4c95cff6ff5) *)
+(* DO NOT EDIT (digest: ffdd0de56d5e6e6fbe9658068c9a07fe) *)
 module OASISGettext = struct
 (* # 22 "src/oasis/OASISGettext.ml" *)
 
@@ -39,10 +39,10 @@ module OASISExpr = struct
   open OASISGettext
 
 
-  type test = string 
+  type test = string
 
 
-  type flag = string 
+  type flag = string
 
 
   type t =
@@ -52,10 +52,10 @@ module OASISExpr = struct
     | EOr of t * t
     | EFlag of flag
     | ETest of test * string
-    
 
 
-  type 'a choices = (t * 'a) list 
+
+  type 'a choices = (t * 'a) list
 
 
   let eval var_get t =
@@ -430,10 +430,10 @@ module MyOCamlbuildBase = struct
   module OC = Ocamlbuild_pack.Ocaml_compiler
 
 
-  type dir = string 
-  type file = string 
-  type name = string 
-  type tag = string 
+  type dir = string
+  type file = string
+  type name = string
+  type tag = string
 
 
 (* # 62 "src/plugins/ocamlbuild/MyOCamlbuildBase.ml" *)
@@ -448,7 +448,7 @@ module MyOCamlbuildBase = struct
          * directory.
          *)
         includes:  (dir * dir list) list;
-      } 
+      }
 
 
   let env_filename =
@@ -618,7 +618,6 @@ let package_default =
        [
           ("userspace", ["core"; "server"; "unix"]);
           ("unix", ["core"]);
-          ("server_test", ["core"; "server"; "unix"]);
           ("server", ["core"]);
           ("core_test", ["core"]);
           ("cli", ["core"; "unix"]);
@@ -629,6 +628,6 @@ let package_default =
 
 let dispatch_default = MyOCamlbuildBase.dispatch_default package_default;;
 
-# 633 "myocamlbuild.ml"
+# 632 "myocamlbuild.ml"
 (* OASIS_STOP *)
 Ocamlbuild_plugin.dispatch dispatch_default;;

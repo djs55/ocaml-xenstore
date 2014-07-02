@@ -198,7 +198,7 @@ module Name : sig
 
   val relative: t -> t -> t
   (** [relative t base]: if [t] and [base] are absolute and [base] is a prefix
-      of [t], return a relative path which refers to [t] when resolved 
+      of [t], return a relative path which refers to [t] when resolved
       relative to [base]. *)
 
   val to_path: t -> Path.t
@@ -227,6 +227,9 @@ module ACL : sig
     acl: (domid * perm) list; (** ... unless overridden in the ACL *)
   } with sexp
   (** an access control list *)
+
+  val to_string: t -> string
+  (** Print an ACL in the same format as 'xenstore-ls' *)
 
   val unmarshal: Cstruct.t -> (t, string) result
   (** [unmarshal buf] reads a [t] from [buf] or produces a descriptive error
@@ -263,6 +266,9 @@ module Response : sig
   | Watchevent of Name.t * string
   with sexp
   (** the body of a response *)
+
+  val to_string: t -> string
+  (** [to_string t] returns a short human-readable description of [t] *)
 
   val get_ty: t -> Op.t
   (** [get_ty t] returns the operation code corresponding to [t] *)
@@ -304,6 +310,9 @@ module Request : sig
   | Isintroduced of int
   with sexp
   (** the payload of a request *)
+
+  val to_string: t -> string
+  (** [to_string t] returns a short human-readable description of [t] *)
 
   val get_ty: t -> Op.t
   (** [get_ty t] returns the operation code associated with [t] *)

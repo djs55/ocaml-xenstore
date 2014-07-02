@@ -11,10 +11,13 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU Lesser General Public License for more details.
  *)
-
+(*
 open Xenstore
+open Persistence
 
-val persist: Transaction.side_effects -> unit Lwt.t
+val view: (module VIEW) Lwt.t
+
+val persist: ?origin:string -> 'view Transaction.side_effects -> unit Lwt.t
 (** Persists the given side-effects. Make sure you start exactly one
     persistence thread *)
 
@@ -26,3 +29,8 @@ val initialise: S.persistence -> unit Lwt.t
     [persistence-policy] is [NoPersistence] then all updates are discarded.
     If [persistence-policy] is [Git path] then all updates are
     stored in a git database located at [path] *)
+
+val immediate: ('a * 'view Transaction.side_effects) Lwt.t -> 'a Lwt.t
+(** [immediate t] persists the side effects associated with [t] immediately
+    and returns the value *)
+*)

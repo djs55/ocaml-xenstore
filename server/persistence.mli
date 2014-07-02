@@ -12,9 +12,22 @@
  * GNU Lesser General Public License for more details.
  *)
 
-val xenstored_socket: string ref
-(** path to the xenstored Unix domain socket *)
-
 open Xenstore
 
-include S.SERVER
+module type VIEW = sig
+  type t
+
+  val create: unit -> t Lwt.t
+
+  val read: t -> Protocol.Path.t -> [ `Ok of Node.contents | `Enoent of Protocol.Path.t ] Lwt.t
+
+  val list: t -> Protocol.Path.t -> [ `Ok of string list | `Enoent of Protocol.Path.t ] Lwt.t
+
+  val write: t -> Protocol.Path.t -> Node.contents -> [ `Ok of unit ] Lwt.t
+
+  val mem: t -> Protocol.Path.t -> bool Lwt.t
+
+  val rm: t -> Protocol.Path.t -> [ `Ok of unit ] Lwt.t
+
+  val merge: t -> string -> bool Lwt.t
+end

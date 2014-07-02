@@ -1,5 +1,5 @@
 # OASIS_START
-# DO NOT EDIT (digest: 19a216ff2577d03ebda943c8375bd6d0)
+# DO NOT EDIT (digest: b8f9c98ff4828c20208a69a9d193c612)
 # Ignore VCS directories, you can use the same kind of rule outside
 # OASIS_START/STOP if you want to exclude directories that contains
 # useless stuff for the build process
@@ -27,34 +27,19 @@
 # Library xenstored
 "server/xenstored.cmxs": use_xenstored
 "server/logging.cmx": for-pack(Xenstored)
-"server/pRef.cmx": for-pack(Xenstored)
-"server/pSet.cmx": for-pack(Xenstored)
-"server/pMap.cmx": for-pack(Xenstored)
-"server/pQueue.cmx": for-pack(Xenstored)
-"server/pBinReader.cmx": for-pack(Xenstored)
-"server/pBinWriter.cmx": for-pack(Xenstored)
-"server/logging_interface.cmx": for-pack(Xenstored)
-"server/connection.cmx": for-pack(Xenstored)
-"server/call.cmx": for-pack(Xenstored)
-"server/trie.cmx": for-pack(Xenstored)
-"server/symbol.cmx": for-pack(Xenstored)
-"server/tree.cmx": for-pack(Xenstored)
-"server/limits.cmx": for-pack(Xenstored)
-"server/quota.cmx": for-pack(Xenstored)
-"server/quota_interface.cmx": for-pack(Xenstored)
+"server/error.cmx": for-pack(Xenstored)
 "server/perms.cmx": for-pack(Xenstored)
-"server/node.cmx": for-pack(Xenstored)
-"server/store.cmx": for-pack(Xenstored)
-"server/mount.cmx": for-pack(Xenstored)
-"server/database.cmx": for-pack(Xenstored)
-"server/transaction.cmx": for-pack(Xenstored)
-"server/server.cmx": for-pack(Xenstored)
-"server/domain.cmx": for-pack(Xenstored)
+"server/persistence.cmx": for-pack(Xenstored)
 "server/introduce.cmx": for-pack(Xenstored)
-"server/heap_debug_interface.cmx": for-pack(Xenstored)
+"server/connection.cmx": for-pack(Xenstored)
+"server/server.cmx": for-pack(Xenstored)
+"server/effects.cmx": for-pack(Xenstored)
 <server/*.ml{,i}>: pkg_cstruct
 <server/*.ml{,i}>: pkg_cstruct.syntax
-<server/*.ml{,i}>: pkg_irminsule.backend.git
+<server/*.ml{,i}>: pkg_git
+<server/*.ml{,i}>: pkg_irmin
+<server/*.ml{,i}>: pkg_irmin.backend
+<server/*.ml{,i}>: pkg_irmin.unix
 <server/*.ml{,i}>: pkg_lwt
 <server/*.ml{,i}>: pkg_sexplib
 <server/*.ml{,i}>: pkg_uri
@@ -88,41 +73,6 @@
 <core_test/*.ml{,i}>: pkg_uri
 <core_test/*.ml{,i}>: use_xenstore
 <core_test/core_test.{native,byte}>: custom
-# Executable server_test
-<server_test/server_test.{native,byte}>: pkg_cstruct
-<server_test/server_test.{native,byte}>: pkg_cstruct.syntax
-<server_test/server_test.{native,byte}>: pkg_irminsule.backend.git
-<server_test/server_test.{native,byte}>: pkg_lwt
-<server_test/server_test.{native,byte}>: pkg_oUnit
-<server_test/server_test.{native,byte}>: pkg_sexplib
-<server_test/server_test.{native,byte}>: pkg_uri
-<server_test/server_test.{native,byte}>: use_xenstore
-<server_test/server_test.{native,byte}>: use_xenstored
-<server_test/server_test.{native,byte}>: custom
-# Executable server_binary_test
-<server_test/binary.{native,byte}>: pkg_cstruct
-<server_test/binary.{native,byte}>: pkg_cstruct.syntax
-<server_test/binary.{native,byte}>: pkg_irminsule.backend.git
-<server_test/binary.{native,byte}>: pkg_lwt
-<server_test/binary.{native,byte}>: pkg_lwt.unix
-<server_test/binary.{native,byte}>: pkg_oUnit
-<server_test/binary.{native,byte}>: pkg_sexplib
-<server_test/binary.{native,byte}>: pkg_uri
-<server_test/binary.{native,byte}>: use_xenstore
-<server_test/binary.{native,byte}>: use_xenstore_unix
-<server_test/binary.{native,byte}>: use_xenstored
-<server_test/*.ml{,i}>: pkg_cstruct
-<server_test/*.ml{,i}>: pkg_cstruct.syntax
-<server_test/*.ml{,i}>: pkg_irminsule.backend.git
-<server_test/*.ml{,i}>: pkg_lwt
-<server_test/*.ml{,i}>: pkg_lwt.unix
-<server_test/*.ml{,i}>: pkg_oUnit
-<server_test/*.ml{,i}>: pkg_sexplib
-<server_test/*.ml{,i}>: pkg_uri
-<server_test/*.ml{,i}>: use_xenstore
-<server_test/*.ml{,i}>: use_xenstore_unix
-<server_test/*.ml{,i}>: use_xenstored
-<server_test/binary.{native,byte}>: custom
 # Executable oxenstored
 <userspace/main.{native,byte}>: oasis_executable_oxenstored_cclib
 "userspace/liboxenstored_stubs.lib": oasis_executable_oxenstored_cclib
@@ -133,9 +83,12 @@
 <userspace/main.{native,byte}>: pkg_cmdliner
 <userspace/main.{native,byte}>: pkg_cstruct
 <userspace/main.{native,byte}>: pkg_cstruct.syntax
+<userspace/main.{native,byte}>: pkg_git
 <userspace/main.{native,byte}>: pkg_io-page
 <userspace/main.{native,byte}>: pkg_io-page.unix
-<userspace/main.{native,byte}>: pkg_irminsule.backend.git
+<userspace/main.{native,byte}>: pkg_irmin
+<userspace/main.{native,byte}>: pkg_irmin.backend
+<userspace/main.{native,byte}>: pkg_irmin.unix
 <userspace/main.{native,byte}>: pkg_lwt
 <userspace/main.{native,byte}>: pkg_lwt.unix
 <userspace/main.{native,byte}>: pkg_sexplib
@@ -195,9 +148,12 @@
 <userspace/dbgring.{native,byte}>: pkg_cmdliner
 <userspace/dbgring.{native,byte}>: pkg_cstruct
 <userspace/dbgring.{native,byte}>: pkg_cstruct.syntax
+<userspace/dbgring.{native,byte}>: pkg_git
 <userspace/dbgring.{native,byte}>: pkg_io-page
 <userspace/dbgring.{native,byte}>: pkg_io-page.unix
-<userspace/dbgring.{native,byte}>: pkg_irminsule.backend.git
+<userspace/dbgring.{native,byte}>: pkg_irmin
+<userspace/dbgring.{native,byte}>: pkg_irmin.backend
+<userspace/dbgring.{native,byte}>: pkg_irmin.unix
 <userspace/dbgring.{native,byte}>: pkg_lwt
 <userspace/dbgring.{native,byte}>: pkg_lwt.unix
 <userspace/dbgring.{native,byte}>: pkg_sexplib
@@ -213,9 +169,12 @@
 <userspace/*.ml{,i}>: pkg_cmdliner
 <userspace/*.ml{,i}>: pkg_cstruct
 <userspace/*.ml{,i}>: pkg_cstruct.syntax
+<userspace/*.ml{,i}>: pkg_git
 <userspace/*.ml{,i}>: pkg_io-page
 <userspace/*.ml{,i}>: pkg_io-page.unix
-<userspace/*.ml{,i}>: pkg_irminsule.backend.git
+<userspace/*.ml{,i}>: pkg_irmin
+<userspace/*.ml{,i}>: pkg_irmin.backend
+<userspace/*.ml{,i}>: pkg_irmin.unix
 <userspace/*.ml{,i}>: pkg_lwt
 <userspace/*.ml{,i}>: pkg_lwt.unix
 <userspace/*.ml{,i}>: pkg_sexplib
@@ -231,9 +190,12 @@
 "userspace/domains_stubs.c": pkg_cmdliner
 "userspace/domains_stubs.c": pkg_cstruct
 "userspace/domains_stubs.c": pkg_cstruct.syntax
+"userspace/domains_stubs.c": pkg_git
 "userspace/domains_stubs.c": pkg_io-page
 "userspace/domains_stubs.c": pkg_io-page.unix
-"userspace/domains_stubs.c": pkg_irminsule.backend.git
+"userspace/domains_stubs.c": pkg_irmin
+"userspace/domains_stubs.c": pkg_irmin.backend
+"userspace/domains_stubs.c": pkg_irmin.unix
 "userspace/domains_stubs.c": pkg_lwt
 "userspace/domains_stubs.c": pkg_lwt.unix
 "userspace/domains_stubs.c": pkg_sexplib
@@ -281,6 +243,9 @@ true: annot
 <cli/*.ml>: pkg_lwt.syntax
 <bench/*.ml>: pkg_lwt.syntax
 <core>: include
+<core/s.ml>: pkg_sexplib.syntax
+<unix/sockets.ml>: pkg_sexplib.syntax
+<userspace/interdomain.ml>: pkg_sexplib.syntax
 <client_lwt>: include
 <client_unix>: include
 <server>: include

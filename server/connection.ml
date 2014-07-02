@@ -14,6 +14,7 @@
 open Sexplib.Std
 open Lwt
 open Xenstore
+open Persistence
 
 let debug fmt = Logging.debug "connection" fmt
 let info  fmt = Logging.info  "connection" fmt
@@ -22,6 +23,25 @@ let error fmt = Logging.debug "connection" fmt
 module Watch = struct
   type t = Protocol.Name.t * string with sexp
 end
+
+module Make(V: VIEW) = struct
+  type t = {
+    domid: int;
+    perms: Perms.t;
+  }
+
+  let create v (uri, domid) =
+    let perms = Perms.of_domain domid in
+    return { domid; perms }
+
+  let index _ = -1
+
+  let perms t = t.perms
+
+  let destroy v t =
+    return ()
+end
+(*
 module Watch_events = PQueue.Make(Watch)
 module Watch_registrations = PSet.Make(Watch)
 
@@ -63,7 +83,8 @@ let incr_nb_ops t = t.stat_nb_ops <- t.stat_nb_ops + 1
 
 let pop_watch_events_nowait_nolock t =
   Watch_events.fold (fun acc x -> x :: acc) [] (watch_events t) >>= fun q ->
-  Watch_events.clear (watch_events t) >>= fun () ->
+  Watch_events.clear (watch_events t) >>= fun effects ->
+  Database.persist effects >>= fun () ->
   return (List.rev q)
 
 let pop_watch_events t =
@@ -90,7 +111,7 @@ let by_index   : (int,   t) Hashtbl.t = Hashtbl.create 128
 
 let watches : (string, w list) Trie.t ref = ref (Trie.create ())
 
-let w_create ~con ~name ~token = { 
+let w_create ~con ~name ~token = {
   con = con;
   watch = name, token;
   count = 0;
@@ -127,16 +148,16 @@ let fire_one limits name watch =
     if w >= limits.Limits.number_of_queued_watch_events then begin
       error "domain %u reached watch event quota (%d >= %d): dropping watch %s:%s" watch.con.domid w limits.Limits.number_of_queued_watch_events (Protocol.Name.to_string name) token;
       watch.con.nb_dropped_watches <- watch.con.nb_dropped_watches + 1;
-      return ()
+      return Transaction.(no_side_effects ())
     end else begin
-      Watch_events.add (name, token) watch.con.watch_events >>= fun () ->
+      Watch_events.add (name, token) watch.con.watch_events >>= fun effects ->
       Lwt_condition.signal watch.con.cvar ();
-      return ()
+      return effects
     end
   | None ->
-      Watch_events.add (name, token) watch.con.watch_events >>= fun () ->
+      Watch_events.add (name, token) watch.con.watch_events >>= fun effects ->
       Lwt_condition.signal watch.con.cvar ();
-      return ()
+      return effects
   end
 
 let watch con limits (name, token) =
@@ -160,8 +181,8 @@ let watch con limits (name, token) =
     | None -> return () ) >>= fun () ->
 
   let watch = w_create ~con ~token ~name in
-  fire_one limits None watch >>= fun () ->
-  
+  fire_one limits None watch >>= fun effects1 ->
+
   Hashtbl.replace con.ws name (watch :: l);
   con.nb_watches <- con.nb_watches + 1;
 
@@ -170,7 +191,8 @@ let watch con limits (name, token) =
      let ws = if Trie.mem !watches key then Trie.find !watches key else [] in
      Trie.set !watches key (watch :: ws));
 
-  Watch_registrations.add (name, token) con.watch_registrations
+  Watch_registrations.add (name, token) con.watch_registrations >>= fun effects2 ->
+  return Transaction.(effects1 ++ effects2)
 
 let unwatch con (name, token) =
   match (
@@ -184,7 +206,7 @@ let unwatch con (name, token) =
   | None ->
     info "unwatch: watch %s not currently registered" (Protocol.Name.to_string name);
     (* unwatch should be idempotent *)
-    return ()
+    return Transaction.(no_side_effects ())
   | Some (ws, w) ->
     let filtered = List.filter (fun e -> e != w) ws in
     if List.length filtered > 0
@@ -200,16 +222,21 @@ let unwatch con (name, token) =
 
     Watch_registrations.remove (name, token) con.watch_registrations
 
+let fire_many limits name ws =
+  Lwt_list.fold_left_s (fun side_effects w ->
+    fire_one limits name w >>= fun effects ->
+    return Transaction.(side_effects ++ effects)
+  ) Transaction.(no_side_effects ()) ws
+
 let fire limits (op, name) =
 	let key = key_of_name name in
-        let ws = Trie.fold_path (fun acc _ w -> match w with None -> acc | Some ws -> acc @ ws) !watches [] key in
-        Lwt_list.iter_s (fire_one limits (Some name)) ws >>= fun () ->
-	if op = Protocol.Op.Rm
-	then
-          let ws = Trie.fold (fun acc _ w -> match w with None -> acc | Some ws -> acc @ ws) (Trie.sub !watches key) [] in
-          Lwt_list.iter_s (fire_one limits None) ws
-        else
-          return ()
+  let ws = Trie.fold_path (fun acc _ w -> match w with None -> acc | Some ws -> acc @ ws) !watches [] key in
+  fire_many limits (Some name) ws >>= fun effects1 ->
+  if op = Protocol.Op.Rm then begin
+    let ws = Trie.fold (fun acc _ w -> match w with None -> acc | Some ws -> acc @ ws) (Trie.sub !watches key) [] in
+    fire_many limits None ws >>= fun effects2 ->
+    return Transaction.(effects1 ++ effects2)
+  end else return effects1
 
 let register_transaction limits con store =
   ( match limits with
@@ -220,11 +247,11 @@ let register_transaction limits con store =
       end else return ()
     | None -> return ()
   ) >>= fun () ->
-  PInt32.get con.next_tid >>= fun id ->
-  PInt32.set (Int32.succ id) con.next_tid >>= fun () ->
+  PInt32.get con.next_tid >>= fun (id, e1) ->
+  PInt32.set (Int32.succ id) con.next_tid >>= fun e2 ->
   let ntrans = Transaction.make id store in
   Hashtbl.add con.transactions id ntrans;
-  return id
+  return (id, Transaction.(e1 ++ e2))
 
 let unregister_transaction con tid =
 	Hashtbl.remove con.transactions tid
@@ -242,7 +269,7 @@ let mark_symbols con =
 let destroy address =
   if not(Hashtbl.mem by_address address) then begin
     error "Failed to remove connection for: %s" (Uri.to_string address);
-    return ()
+    return Transaction.(no_side_effects())
   end else begin
     let c = Hashtbl.find by_address address in
     info "Destroying connection to %s" (Uri.to_string c.address);
@@ -254,23 +281,24 @@ let destroy address =
       ) !watches;
     Hashtbl.remove by_address address;
     Hashtbl.remove by_index c.idx;
-    Watch_events.clear c.watch_events >>= fun () ->
-    Watch_registrations.clear c.watch_registrations >>= fun () ->
-    PInt32.destroy c.next_tid >>= fun () ->
-    PPerms.destroy c.perm
+    Watch_events.clear c.watch_events >>= fun effects1 ->
+    Watch_registrations.clear c.watch_registrations >>= fun effects2 ->
+    PInt32.destroy c.next_tid >>= fun effects3 ->
+    PPerms.destroy c.perm  >>= fun effects4 ->
+    return Transaction.(effects1 ++ effects2 ++ effects3 ++ effects4)
   end
 
 let create (address, domid) =
   if Hashtbl.mem by_address address then begin
     info "Connection.create: found existing connection for %s" (Uri.to_string address);
-    return (Hashtbl.find by_address address)
+    return (Hashtbl.find by_address address, Transaction.(no_side_effects()))
   end else begin
     let idx = !counter in
     incr counter;
-    Watch_events.create (path_of_address "events" address idx) >>= fun watch_events ->
-    Watch_registrations.create (path_of_address "registrations" address idx) >>= fun watch_registrations ->
-    PInt32.create (path_of_address "next-transaction-id" address idx) 1l >>= fun next_tid ->
-    PPerms.create (path_of_address "permissions" address idx) (Perms.of_domain domid) >>= fun perm ->
+    Watch_events.create (path_of_address "events" address idx) >>= fun (watch_events, effects1) ->
+    Watch_registrations.create (path_of_address "registrations" address idx) >>= fun (watch_registrations, effects2) ->
+    PInt32.create (path_of_address "next-transaction-id" address idx) 1l >>= fun (next_tid, effects3) ->
+    PPerms.create (path_of_address "permissions" address idx) (Perms.of_domain domid) >>= fun (perm, effects4) ->
     let con = {
       address; domid; idx; next_tid; perm;
       transactions = Hashtbl.create 5;
@@ -289,9 +317,12 @@ let create (address, domid) =
 
     (* Recreate the in-memory tables of watch registrations *)
     Watch_registrations.fold (fun acc w -> w :: acc) [] watch_registrations >>= fun watches ->
-    Lwt_list.iter_s (watch con None) watches >>= fun () ->
+    Lwt_list.fold_left_s (fun side_effects w ->
+      watch con None w >>= fun effects ->
+      return Transaction.(side_effects ++ effects)
+    ) Transaction.(effects1 ++ effects2 ++ effects3 ++ effects4) watches >>= fun effects ->
 
-    return con
+    return (con, effects)
   end
 
 module Introspect = struct
@@ -345,3 +376,4 @@ module Introspect = struct
 			list_connection t perms c rest
 end
 let _ = Mount.mount (Protocol.Path.of_string "/tool/xenstored/connection") (module Introspect: Tree.S)
+*)

@@ -390,7 +390,7 @@ module Unmarshal = struct
     c c' >>= fun c'' ->
     return (a'', b'', c'')
   | _ -> `Error(Printf.sprintf "Failed to unmarshal a triple: got \"%s\"" (String.escaped (Cstruct.to_string x))))
-  
+
   let string    x = x |> null |> Cstruct.to_string |> return
   let int       x = x |> null |> Cstruct.to_string |> expect_int
   let int32     x = x |> null |> Cstruct.to_string |> expect_int32
@@ -428,6 +428,10 @@ module ACL = struct
     other: perm;              (** default permissions for all others... *)
     acl: (domid * perm) list; (** ... unless overridden in the ACL *)
   } with sexp
+
+  let to_string t =
+    Printf.sprintf "%d%c%s" t.owner (char_of_perm t.other)
+       (String.concat "" (List.map (fun (domid, perm) -> Printf.sprintf ",%d%c" domid (char_of_perm perm)) t.acl))
 
   let marshal perms buf =
     Marshal.list (fun (domid, perm) buf -> buf
@@ -478,6 +482,29 @@ module Response = struct
   | Error of string
   | Watchevent of Name.t * string
   with sexp
+
+  let to_string = function
+  | Read x -> x
+  | Directory xs -> Printf.sprintf "[ %s ]" (String.concat "; " xs)
+  | Getperms x -> ACL.to_string x
+  | Getdomainpath x -> x
+  | Transaction_start x -> Int32.to_string x
+  | Write
+  | Mkdir
+  | Rm
+  | Setperms
+  | Watch
+  | Unwatch
+  | Transaction_end -> "()"
+  | Debug xs -> Printf.sprintf "[ %s ]" (String.concat "; " xs)
+  | Introduce
+  | Resume
+  | Release
+  | Set_target
+  | Restrict -> "()"
+  | Isintroduced x -> string_of_bool x
+  | Error x -> "Error " ^ x
+  | Watchevent(name, token) -> Name.to_string name ^ ":" ^ token
 
   let get_ty = function
   | Read _ -> Op.Read
@@ -586,6 +613,27 @@ module Request = struct
   | Restrict of int
   | Isintroduced of int
   with sexp
+
+  let to_string = function
+  | PathOp(path, Read) -> "read " ^ path
+  | PathOp(path, Directory) -> "directory " ^ path
+  | PathOp(path, Getperms) -> "getperms " ^ path
+  | PathOp(path, Write v) -> "write " ^ path ^ " <- " ^ v
+  | PathOp(path, Mkdir) -> "mkdir " ^ path
+  | PathOp(path, Rm) -> "rm " ^ path
+  | PathOp(path, Setperms v) -> "setperms " ^ path ^ " <- " ^ (ACL.to_string v)
+  | Getdomainpath x -> "getdomainpath " ^ (string_of_int x)
+  | Transaction_start -> "transaction_start"
+  | Watch(path, tok) -> "watch " ^ path ^ " " ^ tok
+  | Unwatch(path, tok) -> "unwatch " ^ path ^ " " ^ tok
+  | Transaction_end b -> "transaction_end " ^ (string_of_bool b)
+  | Debug xs -> "debug"
+  | Introduce (domid, mfn, port) -> Printf.sprintf "introduce %d %nu %d" domid mfn port
+  | Resume x -> "resume " ^ (string_of_int x)
+  | Release x -> "release " ^ (string_of_int x)
+  | Set_target (a, b) -> "set_target " ^ (string_of_int a) ^ " <- " ^ (string_of_int b)
+  | Restrict x -> "restrict " ^ (string_of_int x)
+  | Isintroduced x -> "isintroduced " ^ (string_of_int x)
 
   let get_ty = function
   | PathOp(_, Directory) -> Op.Directory

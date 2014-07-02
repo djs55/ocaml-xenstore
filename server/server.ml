@@ -21,208 +21,169 @@ let ( |> ) a b = b a
 let ( ++ ) f g x = f (g x)
 
 let debug fmt = Logging.debug "server" fmt
+let info fmt  = Logging.info "server" fmt
 let error fmt = Logging.error "server" fmt
 
-let fail_on_error = function
-| `Ok x -> return x
-| `Error x -> fail (Failure x)
+module Make(T: S.SERVER)(V: Persistence.VIEW) = struct
 
-(* A complete response to some action: *)
-type response = {
-  response: Protocol.Response.t option;   (* a packet to write to the channel *)
-  side_effects: Transaction.side_effects; (* a set of idempotent side-effects to effect *)
-  read_ofs: int64;                        (* a read offset to acknowledge (to consume the request) *)
-  write_ofs: int64;                       (* the write offset to write the response *)
-} with sexp
+  type channel_state = {
+    next_read_ofs: T.offset;                  (* the next byte to read *)
+    next_write_ofs: T.offset;                 (* the next byte to write *)
+  }
 
-let no_response = { response = None; side_effects = Transaction.no_side_effects (); read_ofs = 0L; write_ofs = 0L }
+  module C = Connection.Make(V)
+  module E = Effects.Make(V)
 
-module Make = functor(T: S.TRANSPORT) -> struct
+  let handle_connection t =
+    T.address_of t >>= fun address ->
+    let domid = T.domain_of t in
 
-  include T
+    V.create () >>= fun v ->
+    C.create v (address, domid) >>= fun c ->
+    let special_path name = [ "tool"; "xenstored"; name; (match Uri.scheme address with Some x -> x | None -> "unknown"); string_of_int (C.index c) ] in
 
-  let introspect channel =
-    let module Interface = struct
-      include Tree.Unsupported
-      let read t (perms: Perms.t) (path: Protocol.Path.t) =
-        Perms.has perms Perms.CONFIGURE;
-        match T.Introspect.read channel (Protocol.Path.to_string_list path) with
-        | Some x -> x
-        | None -> raise (Node.Doesnt_exist path)
-      let exists t perms path = try ignore(read t perms path); true with Node.Doesnt_exist _ -> false
-      let ls t perms path =
-        Perms.has perms Perms.CONFIGURE;
-        T.Introspect.ls channel (Protocol.Path.to_string_list path)
-      let write t _ _ perms path v =
-        Perms.has perms Perms.CONFIGURE;
-        if not(T.Introspect.write channel (Protocol.Path.to_string_list path) v)
-        then raise Perms.Permission_denied
-    end in
-    (module Interface: Tree.S)
+    (* If this is a restart, there will be an existing side_effects entry.
+       If this is a new connection, we set an initial state *)
+    T.get_read_offset t >>= fun next_read_ofs ->
+    T.get_write_offset t >>= fun next_write_ofs ->
 
-  module PReader = PBinReader.Make(T.Reader)
-  module PWriter = PBinWriter.Make(T.Writer)
+    let initial_state = {
+      next_read_ofs;
+      next_write_ofs;
+    } in
 
-  module PResponse = PRef.Make(struct type t = response with sexp end)
+    let effects = ref initial_state in
 
-	let handle_connection t =
-		lwt address = T.address_of t in
-                let dom = T.domain_of t in
-		let interface = introspect t in
-		Connection.create (address, dom) >>= fun c ->
-                let special_path name = [ "tool"; "xenstored"; name; (match Uri.scheme address with Some x -> x | None -> "unknown"); string_of_int (Connection.index c) ] in
-                PReader.create (special_path "reader") t >>= fun reader ->
-                PWriter.create (special_path "writer") t >>= fun writer ->
-                PResponse.create (special_path "response") no_response >>= fun presponse ->
+    let origin = Printf.sprintf "Accepted connection %d from domain %d over %s"
+      (C.index c) domid (match Uri.scheme address with None -> "unknown protocol" | Some x -> x) in
 
-                (* [write write_ofs response] marshals [response] at offset [write_ofs]
-                   in the output stream. *)
-                let write =
-		  let m = Lwt_mutex.create () in
-                  let reply_buf = Cstruct.create (Protocol.Header.sizeof + Protocol.xenstore_payload_max) in
-                  fun write_ofs response ->
-                  Lwt_mutex.with_lock m
-                    (fun () ->
-                      ( Logging_interface.response response >>= function
-                        | true ->
-                          debug "-> out  %s %ld %s" (Uri.to_string address) 0l (Sexp.to_string (Response.sexp_of_t response));
-                          return ()
-                        | false ->
-                          return () ) >>= fun () ->
-                      let next = Protocol.Response.marshal response (Cstruct.shift reply_buf Protocol.Header.sizeof) in
-                      let len = next.Cstruct.off in
-                      let reply_buf' = Cstruct.sub reply_buf 0 len in
-                      let hdr = { Header.tid = 0l; rid = 0l; ty = Protocol.Response.get_ty response; len = len - Protocol.Header.sizeof} in
-                      ignore (Protocol.Header.marshal hdr reply_buf);
-                      PWriter.write writer reply_buf' write_ofs >>= fun write_ofs ->
-                      PWriter.sync writer >>= function
-                      | None ->
-                        error "PWriter.sync failed: closing channel";
-                        fail End_of_file
-                      | Some write_ofs ->
-                        return write_ofs
-                    ) in
+    V.merge v origin >>= fun ok ->
+    if not ok then error "Failed to commit the connection transaction";
 
-                let read =
-                  let header_buf = Cstruct.create Protocol.Header.sizeof in
-                  let payload_buf = Cstruct.create Protocol.xenstore_payload_max in
-                  fun ofs ->
-                    PReader.read reader header_buf ofs >>= fun ok ->
-                    (if not ok then begin
-                      error "Failed to read a packet header: closing channel";
-                      fail End_of_file
-                    end else return ()) >>= fun () ->
-                    fail_on_error (Protocol.Header.unmarshal header_buf) >>= fun hdr ->
-                    let ofs = Int64.(add ofs (of_int Protocol.Header.sizeof)) in
-                    let payload_buf' = Cstruct.sub payload_buf 0 hdr.Protocol.Header.len in
-                    PReader.read reader payload_buf' ofs >>= fun ok ->
-                    (if not ok then begin
-                      error "Failed to read a packet payload: closing channel";
-                      fail End_of_file
-                    end else return ()) >>= fun () ->
-                    let ofs = Int64.(add ofs (of_int hdr.Protocol.Header.len)) in
-                    match Protocol.Request.unmarshal hdr payload_buf' with
-                    | `Ok r -> return (ofs, `Ok (hdr, r))
-                    | `Error e -> return (ofs, `Error e) in
-                let write_m = Lwt_mutex.create () in
-                Lwt_mutex.lock write_m >>= fun () ->
+    (* Hold this mutex when writing to the output channel: *)
+    let write_m = Lwt_mutex.create () in
+    Lwt_mutex.lock write_m >>= fun () ->
 
-		let flush_watch_events write_ofs q =
-                        q |> List.map (fun (path, token) -> Protocol.Response.Watchevent(path, token))
-                          |> Lwt_list.fold_left_s write write_ofs in
+(*
 		let (background_watch_event_flusher: unit Lwt.t) =
 			while_lwt true do
-                                Connection.pop_watch_events c >>= fun w ->
-                                Lwt_mutex.lock write_m >>= fun () ->
-                                PResponse.get presponse >>= fun r ->
-                                flush_watch_events r.write_ofs w >>= fun write_ofs ->
-                                PResponse.set {r with write_ofs } presponse >>= fun () ->
-                                Lwt_mutex.unlock write_m;
-                                return ()
+        C.pop_watch_events c >>= fun w ->
+        (* XXX: it's possible to lose watch events if we crash here *)
+        Lwt_mutex.lock write_m >>= fun () ->
+        Lwt_list.iter_s
+          (fun (p, tok) ->
+            T.enqueue t (Protocol.Response.Watchevent(p, tok)) >>= fun next_write_ofs ->
+            flush t next_write_ofs
+            (* XXX: now safe to remove event from the queue *)
+          ) w >>= fun () ->
+        Lwt_mutex.unlock write_m;
+        return ()
 			done in
-        let connection_path = Protocol.Path.of_string_list (special_path "transport") in
-                Mount.mount connection_path interface >>= fun () ->
-		try_lwt
-                        let rec loop () =
-                                (* (Re-)complete any outstanding request. In the event of a crash
-                                   these steps will be re-executed. Each step must therefore be
-                                   idempotent. *)
-                                PResponse.get presponse >>= fun r ->
-                                Quota.limits_of_domain dom >>= fun limits ->
-                                Transaction.get_watch r.side_effects   |> Lwt_list.iter_s (Connection.watch c (Some limits)) >>= fun () ->
-                                Transaction.get_unwatch r.side_effects |> Lwt_list.iter_s (Connection.unwatch c)             >>= fun () ->
-                                Transaction.get_watches r.side_effects |> Lwt_list.iter_s (Connection.fire (Some limits))    >>= fun () ->
-                                Lwt_list.iter_s Introduce.introduce (Transaction.get_domains r.side_effects) >>= fun () ->
-                                Database.persist r.side_effects >>= fun () ->
-                                (* If there is a response to write then write it and update the
-                                   next write offset. The only time there is no response is when
-                                   the first request has not been processed yet. *)
-                                ( match r.response with
-                                  | None -> return r.write_ofs (* always 0L *)
-                                  | Some response -> write r.write_ofs response
-                                ) >>= fun write_ofs ->
-                                PReader.ack reader r.read_ofs >>= fun () ->
-                                Lwt_mutex.unlock write_m;
+*)
+    try_lwt
+      let rec loop () =
+        (* (Re-)complete any outstanding request. In the event of a crash
+           these steps will be re-executed. Each step must therefore be
+           idempotent. *)
 
-                                (* Read the next request, parse, and compute the response actions.
-                                   The transient in-memory store is updated. Other side-effects are
-                                   computed but not executed. *)
-                                ( read r.read_ofs >>= function
-                                  | read_ofs, `Ok (hdr, request) ->
-				        Connection.pop_watch_events_nowait c >>= fun events ->
-                                        Database.store >>= fun store ->
-                                        Quota.limits_of_domain dom >>= fun limits ->
-                                        Connection.PPerms.get (Connection.perm c) >>= fun perm ->
-                                        Lwt_mutex.lock write_m >>= fun () ->
-                                        (* Check to see if the watch event thread has enqueued a response *)
-                                        PResponse.get presponse >>= fun r2 ->
-                                        if r.write_ofs <> r2.write_ofs
-                                        then return None
-                                        else begin
-                                                (* This will 'commit' updates to the in-memory store: *)
-                                                Call.reply store (Some limits) perm c hdr request >>= fun (response, side_effects) ->
-                                                return (Some { response = Some response; side_effects; read_ofs; write_ofs })
-                                        end
-                                  | read_ofs, `Error msg ->
-					(* quirk: if this is a NULL-termination error then it should be EINVAL *)
-                                        let response = Protocol.Response.Error "EINVAL" in
-                                        let side_effects = Transaction.no_side_effects () in
+        (* First execute the idempotent side_effects *)
+        let r = !effects in
+(*
+        Quota.limits_of_domain dom >>= fun (limits, e2) ->
+        let side_effects = Transaction.(e1 ++ e2) in
+        Lwt_list.fold_left_s (fun side_effects w ->
+          Connection.watch c (Some limits) w >>= fun effects ->
+          return Transaction.(side_effects ++ effects)
+        ) side_effects (Transaction.get_watch r.side_effects) >>= fun side_effects ->
+        Lwt_list.fold_left_s (fun side_effects w ->
+          Connection.unwatch c w >>= fun effects ->
+          return Transaction.(side_effects ++ effects)
+        ) side_effects (Transaction.get_unwatch r.side_effects) >>= fun side_effects ->
+        Lwt_list.fold_left_s (fun side_effects w ->
+          Connection.fire (Some limits) w >>= fun effects ->
+          return Transaction.(side_effects ++ effects)
+        ) side_effects (Transaction.get_watches r.side_effects) >>= fun side_effects ->
+        Quota.limits_of_domain dom >>= fun (limits, e) ->
+        let side_effects = Transaction.(side_effects ++ e) in
+        Connection.PPerms.get (Connection.perm c) >>= fun (perm, e) ->
+        let side_effects = Transaction.(side_effects ++ e) in
+        Lwt_list.iter_s Introduce.introduce (Transaction.get_domains r.side_effects) >>= fun () ->
+*)
+        let perms = C.perms c in
+(*
+        let origin =
+          Printf.sprintf "Resynchronising state for connection %d domain %d"
+          (Connection.index c) dom in
+        Database.persist ~origin side_effects >>= fun () ->
+*)
+        (* Second transmit the response packet *)
+        T.flush t r.next_write_ofs >>= fun () ->
+        Lwt_mutex.unlock write_m;
 
-                                        Lwt_mutex.lock write_m >>= fun () ->
-                                        (* Check to see fi the watch event thread has enqueued a response *)
-                                        PResponse.get presponse >>= fun r2 ->
-                                        if r.write_ofs <> r2.write_ofs
-                                        then return None
-                                        else return (Some { response = Some response; side_effects; read_ofs; write_ofs })
-                                ) >>= function
-                                | None ->
-                                        (* The background event thread has emitted some packets *)
-                                        loop ()
-                                | Some response ->
-                                        (* If we crash here then future iterations of the loop will read
-                                           the same request packet. However since every connection is processed
-                                           concurrently we don't expect to compute the same response each time.
-                                           Therefore the choice of which transaction to commit may be made
-                                           differently each time, however the client should be unaware of this. *)
+        (* Read the next request, parse, and compute the response actions.
+           The transient in-memory store is updated. Other side-effects are
+           computed but not executed. *)
+        ( T.recv t r.next_read_ofs >>= function
+          | read_ofs, `Ok (hdr, request) ->
+          (*
+	          C.pop_watch_events_nowait c >>= fun events ->
+*)
+            Lwt_mutex.lock write_m >>= fun () ->
+            (* This will 'commit' updates to the in-memory store: *)
+(*
+            E.reply v (Some limits) perm c hdr request >>= fun (response, side_effects) ->
+*)
+            E.reply domid perms hdr request >>= fun (response, side_effects) ->
+            let hdr = Protocol.({ hdr with Header.ty = Response.get_ty response}) in
+            return (hdr, response, side_effects, read_ofs)
+          | read_ofs, `Error msg ->
+					  (* quirk: if this is a NULL-termination error then it should be EINVAL *)
+            let response = Protocol.Response.Error "EINVAL" in
 
-                                        PResponse.set response presponse >>= fun () ->
-                                        (* Record the full set of response actions. They'll be executed
-                                           (possibly multiple times) on future loop iterations. *)
+            Lwt_mutex.lock write_m >>= fun () ->
+            let hdr = Header.({ tid = -1l; rid = -1l; ty = Op.Error; len = 0 }) in
+            return (hdr, response, Effects.nothing, read_ofs )
+        ) >>= fun (hdr, response, side_effects, next_read_ofs) ->
 
-                                        loop () in
+          (* If we crash here then future iterations of the loop will read
+             the same request packet. However since every connection is processed
+             concurrently we don't expect to compute the same response each time.
+             Therefore the choice of which transaction to commit may be made
+             differently each time, however the client should be unaware of this. *)
+
+          T.enqueue t hdr response >>= fun next_write_ofs ->
+          (* If we crash here the packet will be dropped because we've not persisted
+             the side-effects, including the write_ofs value: *)
+
+          effects := { next_read_ofs; next_write_ofs };
+
+          let origin = Printf.sprintf "Transaction from connection %d domain %d"
+              (C.index c) domid in
+        loop () in
 			loop ()
 		with e ->
+      info "Closing connection %d to domain %d: %s"
+        (C.index c) domid (Printexc.to_string e);
+    (*
 			Lwt.cancel background_watch_event_flusher;
-			Connection.destroy address >>= fun () ->
-                        Mount.unmount connection_path >>= fun () ->
-                        PReader.destroy reader >>= fun () ->
-                        PWriter.destroy writer >>= fun () ->
-                        PResponse.destroy presponse >>= fun () ->
-                        Quota.remove dom >>= fun () ->
-                        T.destroy t
+      Mount.unmount connection_path >>= fun e1 ->
+      *)
+      V.create () >>= fun v ->
+			C.destroy v c >>= fun () ->
+      V.merge v (Printf.sprintf "Closing connection %d to domain %d\n\nException was: %s"
+        (C.index c) domid (Printexc.to_string e)) >>= fun ok ->
+      if not ok then error "Failed to commit closing connection transaction";
+      (*
+      PEffects.destroy peffects >>= fun e3 ->
+      Quota.remove dom >>= fun e4 ->
+      let origin =
+        Printf.sprintf "Closing connection %d domain %d\n\nException was: %s"
+          (Connection.index c) dom (Printexc.to_string e) in
+      Database.persist ~origin Transaction.(e1 ++ e2 ++ e3 ++ e4) >>= fun () ->
+      *)
+      T.destroy t
 
-	let serve_forever persistence =
-                Database.initialise persistence >>= fun () ->
-		lwt server = T.listen () in
+	let serve_forever () =
+		T.listen () >>= fun server ->
 		T.accept_forever server handle_connection
 end

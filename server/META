@@ -1,8 +1,8 @@
 # OASIS_START
-# DO NOT EDIT (digest: 2b90fb20d3809d961c944bb0a6c90d0d)
+# DO NOT EDIT (digest: 554379bd039388b7fec7c3550150a3f5)
 version = "1.2.5"
 description = "Xenstore protocol library"
-requires = "lwt xenstore irminsule.backend.git sexplib"
+requires = "lwt xenstore irmin irmin.backend irmin.unix git sexplib"
 archive(byte) = "xenstored.cma"
 archive(byte, plugin) = "xenstored.cma"
 archive(native) = "xenstored.cmxa"

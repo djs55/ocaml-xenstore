@@ -1,29 +1,11 @@
 # OASIS_START
-# DO NOT EDIT (digest: fef2cf9290e1529715fedd5c0aa82bce)
+# DO NOT EDIT (digest: ad9b49e485b5b767d85eafd03e395e44)
 Logging
-PRef
-PSet
-PMap
-PQueue
-PBinReader
-PBinWriter
-Logging_interface
-Connection
-Call
-Trie
-Symbol
-Tree
-Limits
-Quota
-Quota_interface
+Error
 Perms
-Node
-Store
-Mount
-Database
-Transaction
-Server
-Domain
+Persistence
 Introduce
-Heap_debug_interface
+Connection
+Server
+Effects
 # OASIS_STOP

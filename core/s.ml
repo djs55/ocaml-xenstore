@@ -31,44 +31,51 @@ module type IO = sig
   val ( >>= ): 'a t -> ('a -> 'b t) -> 'b t
 end
 
-module type SHARED_MEMORY_CHANNEL = sig
-  type t
-  (** a one-directional shared-memory channel *)
-
-  val next: t -> (int64 * Cstruct.t) Lwt.t
-  (** [next s] returns [ofs, chunk] where [chunk] is the data
-      starting at offset [ofs]. *)
-
-  val ack: t -> int64 -> unit Lwt.t
-  (** [ack s ofs] acknowledges that data before [ofs] has
-      been processed. *)
-end
-
-module type TRANSPORT = sig
+module type CONNECTION = sig
   include IO
 
+  type connection
+
+  val create: unit -> connection t
+
+  val destroy: connection -> unit t
+
+  val address_of: connection -> Uri.t t
+
+  val domain_of: connection -> int
+
+  val read: connection -> Cstruct.t -> unit t
+
+  val write: connection -> Cstruct.t -> unit t
+end
+
+module type SERVER = sig
+  include IO
+  include CONNECTION
+    with type 'a t := 'a t
+
   type server
+
   val listen: unit -> server t
 
-  type channel
-  val create: unit -> channel t
+  val accept_forever: server -> (connection -> unit t) -> 'a t
 
-  module Reader: SHARED_MEMORY_CHANNEL with type t = channel
-  module Writer: SHARED_MEMORY_CHANNEL with type t = channel
+  type offset with sexp
 
-  val read: channel -> Cstruct.t -> unit t
-  val write: channel -> Cstruct.t -> unit t
-  val destroy: channel -> unit t
+  val get_read_offset: connection -> offset t
 
-  val address_of: channel -> Uri.t t
-  val domain_of: channel -> int
+  val get_write_offset: connection -> offset t
 
-  val accept_forever: server -> (channel -> unit t) -> 'a t
+  val flush: connection -> offset -> unit t
+
+  val enqueue: connection -> Protocol.Header.t -> Protocol.Response.t -> offset t
+
+  val recv: connection -> offset -> (offset * [ `Ok of (Protocol.Header.t * Protocol.Request.t) | `Error of string ]) t
 
   module Introspect : sig
-    val ls: channel -> string list -> string list
-    val read: channel -> string list -> string option
-    val write: channel -> string list -> string -> bool
+    val ls: connection -> string list -> string list
+    val read: connection -> string list -> string option
+    val write: connection -> string list -> string -> bool
   end
 end
 
@@ -104,9 +111,3 @@ end
 type persistence =
 | NoPersistence (** lose updates after a restart *)
 | Git of string (** persist all updates to a git repo on disk *)
-
-module type SERVER = sig
-  include IO
-
-  val serve_forever: persistence -> unit t
-end
