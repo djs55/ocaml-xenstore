@@ -7,6 +7,10 @@ License:     ISC
 Plugins:     META (0.3)
 BuildTools:  ocamlbuild
 
+Flag kernelspace
+  Default:            false
+  Description:        build shared-memory interface
+
 Library xenstore
   Pack:               true
   CompiledObject:     best
@@ -39,6 +43,7 @@ Library xenstore_userspace
   BuildDepends:       lwt, lwt.unix, xenstore, cstruct.lwt
 
 Library xenstore_kernelspace
+  Build$:             flag(kernelspace)
   CompiledObject:     best
   Path:               kernelspace
   Findlibname:        kernelspace

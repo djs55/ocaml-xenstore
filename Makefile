@@ -7,13 +7,15 @@ J=4
 export OCAMLRUNPARAM=b
 
 TESTS ?= --enable-tests
+KERNELSPACE ?= $(shell if ocamlfind query xen-evtchn >/dev/null 2>&1; then echo --enable-kernelspace; else echo --disable-kernelspace; fi)
+
 
 setup.bin: setup.ml
 	@ocamlopt.opt -o $@ $< || ocamlopt -o $@ $< || ocamlc -o $@ $<
 	@rm -f setup.cmx setup.cmi setup.o setup.cmo
 
 setup.data: setup.bin
-	@./setup.bin -configure $(TESTS)
+	@./setup.bin -configure $(TESTS) $(KERNELSPACE)
 
 build: setup.data setup.bin
 	@./setup.bin -build -j $(J)
